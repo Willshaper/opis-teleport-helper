@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Opis Teleport Helper</title>
+<style>
+  :root {
+    --bg: #0f1720;
+    --panel: #17222e;
+    --border: #24343f;
+    --text: #e6edf3;
+    --muted: #8ba0b0;
+    --teal: #2dd4bf;
+    --teal-dim: #1f9488;
+    --coral: #f8776b;
+    --code: #0b1219;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    padding: 40px 16px;
+  }
+  .card {
+    width: 100%;
+    max-width: 560px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .hint code { color: var(--teal); }
+  .error { color: var(--coral); font-size: 13px; min-height: 18px; margin: 8px 2px 0; }
+  .out-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .cmd {
+    flex: 1;
+    padding: 12px 14px;
+    background: var(--code);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: "Consolas", "SF Mono", monospace;
+    font-size: 15px;
+    color: var(--teal);
+    display: flex;
+    align-items: center;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .cmd.empty { color: var(--muted); }
+  button.copy {
+    flex: 0 0 auto;
+    padding: 0 16px;
+    background: var(--teal-dim);
+    color: #04110f;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button.copy:hover { background: var(--teal); }
+  button.copy:disabled { background: var(--border); color: var(--muted); cursor: default; }
+  button.copied { background: var(--coral); color: #1a0603; }
+
+  textarea {
+    width: 100%;
+    min-height: 70px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-family: "Consolas", "SF Mono", monospace;
+    background: var(--code);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+    resize: vertical;
+  }
+  textarea:focus { border-color: var(--teal-dim); }
+  .dim-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .dim-label {
+    flex: 1;
+    padding: 10px 14px;
+    background: var(--code);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 15px;
+  }
+  .dim-label.empty { color: var(--muted); }
+  .coord-note { color: var(--muted); font-size: 12px; margin: 14px 2px 6px; min-height: 16px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  button.chip {
+    padding: 5px 9px;
+    background: var(--code);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: "Consolas", "SF Mono", monospace;
+    font-size: 12px;
+    color: var(--teal);
+    cursor: pointer;
+  }
+  button.chip:hover { border-color: var(--teal-dim); }
+  button.chip.copied { background: var(--coral); border-color: var(--coral); color: #1a0603; }
+  .row-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+  button.clear-btn {
+    padding: 6px 14px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button.clear-btn:hover { color: var(--coral); border-color: var(--coral); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Opis Teleport Helper</h1>
+    <p class="hint">Run <code>/opis</code>, open <b>Forced Chunks</b>, and <code>Ctrl+C</code> any row — then paste it here. It pulls out the dimension, the exact anchor coords, and every claimed chunk.</p>
+    <textarea id="rowin" placeholder="8&#9;Space Station 8&#9;serverutilities&#9;…&#9;(0,0), (0,-1), (-1,0)&#9;{Team:&quot;heavens_knights&quot;}" spellcheck="false" autofocus></textarea>
+    <div class="row-actions"><button class="clear-btn" id="clearbtn">Clear</button></div>
+    <div class="error" id="rowerr"></div>
+
+    <div class="dim-row">
+      <div class="dim-label empty" id="dimlabel">Dimension …</div>
+      <button class="copy" id="dimbtn" disabled>Copy</button>
+    </div>
+
+    <div class="out-row" id="exactrow" style="display:none">
+      <div class="cmd" id="exactcmd"></div>
+      <button class="copy" id="exactbtn">Copy</button>
+    </div>
+
+    <div class="coord-note" id="coordnote"></div>
+    <div class="chips" id="chips"></div>
+  </div>
+
+<script>
+  function copy(btn) {
+    if (btn.disabled) return;
+    navigator.clipboard.writeText(btn.dataset.cmd).then(() => {
+      if (btn.classList.contains("chip")) {
+        btn.classList.add("copied");
+        setTimeout(() => btn.classList.remove("copied"), 1000);
+      } else {
+        btn.textContent = "Copied";
+        btn.classList.add("copied");
+        setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1200);
+      }
+    });
+  }
+
+  // ---- Claim row parser ----
+  const rowin = document.getElementById("rowin");
+  const rowerr = document.getElementById("rowerr");
+  const dimlabel = document.getElementById("dimlabel");
+  const dimbtn = document.getElementById("dimbtn");
+  const exactrow = document.getElementById("exactrow");
+  const exactcmd = document.getElementById("exactcmd");
+  const exactbtn = document.getElementById("exactbtn");
+  const coordnote = document.getElementById("coordnote");
+  const chips = document.getElementById("chips");
+  const clearbtn = document.getElementById("clearbtn");
+
+  function resetRow() {
+    rowerr.textContent = "";
+    coordnote.textContent = "";
+    chips.innerHTML = "";
+    dimlabel.textContent = "Dimension …";
+    dimlabel.classList.add("empty");
+    dimbtn.disabled = true;
+    dimbtn.textContent = "Copy";
+    dimbtn.classList.remove("copied");
+    exactrow.style.display = "none";
+    exactbtn.textContent = "Copy";
+    exactbtn.classList.remove("copied");
+  }
+
+  function parseRow() {
+    const raw = rowin.value.trim();
+    resetRow();
+    if (!raw) return;
+
+    const dimMatch = raw.match(/^\s*(-?\d+)/);
+    if (!dimMatch) { rowerr.textContent = "Couldn't find a dim ID at the start"; return; }
+    const dim = dimMatch[1];
+
+    dimlabel.textContent = "Dimension " + dim;
+    dimlabel.classList.remove("empty");
+    dimbtn.disabled = false;
+    dimbtn.dataset.cmd = "/cofh tpx " + dim;
+
+    // Exact coords: [ x y z ]
+    const bracket = raw.match(/\[\s*(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*\]/);
+    if (bracket) {
+      const cmd = `/cofh tpx ${bracket[1]} ${Number(bracket[2]) + 2} ${bracket[3]}`;
+      exactcmd.textContent = cmd;
+      exactbtn.dataset.cmd = cmd;
+      exactrow.style.display = "flex";
+    }
+
+    // Chunk coords: (x,z) -> ×16, Y=120
+    const pairs = [];
+    const re = /\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/g;
+    let m;
+    while ((m = re.exec(raw)) !== null) pairs.push([Number(m[1]), Number(m[2])]);
+
+    if (pairs.length) {
+      coordnote.textContent = `${pairs.length} chunk coord${pairs.length === 1 ? "" : "s"}`;
+      for (const [x, z] of pairs) {
+        const cmd = `/cofh tpx ${x * 16} 120 ${z * 16}`;
+        const b = document.createElement("button");
+        b.className = "chip";
+        b.textContent = `(${x},${z})`;
+        b.title = cmd;
+        b.dataset.cmd = cmd;
+        b.addEventListener("click", () => copy(b));
+        chips.appendChild(b);
+      }
+    }
+  }
+
+  rowin.addEventListener("input", parseRow);
+  dimbtn.addEventListener("click", () => copy(dimbtn));
+  exactbtn.addEventListener("click", () => copy(exactbtn));
+  clearbtn.addEventListener("click", () => { rowin.value = ""; resetRow(); rowin.focus(); });
+</script>
+</body>
+</html>
