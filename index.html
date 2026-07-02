@@ -170,6 +170,15 @@
     font-size: 15px;
   }
   .dim-label.empty { color: var(--muted); }
+  .team-line {
+    color: var(--muted);
+    font-size: 14px;
+    margin-top: 14px;
+  }
+  .team-line span {
+    color: var(--teal);
+    font-family: "Consolas", "SF Mono", monospace;
+  }
   .coord-note { color: var(--muted); font-size: 12px; margin: 14px 2px 6px; min-height: 16px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   button.chip {
@@ -209,6 +218,8 @@
     <textarea id="rowin" placeholder="8&#9;Space Station 8&#9;serverutilities&#9;…&#9;(0,0), (0,-1), (-1,0)&#9;{Team:&quot;heavens_knights&quot;}" spellcheck="false" autofocus></textarea>
     <div class="row-actions"><button class="clear-btn" id="clearbtn">Clear</button></div>
     <div class="error" id="rowerr"></div>
+
+    <div class="team-line" id="teamline" style="display:none">Team <span id="teamname"></span></div>
 
     <div class="dim-row">
       <div class="dim-label empty" id="dimlabel">Dimension …</div>
@@ -271,6 +282,8 @@
   const coordnote = document.getElementById("coordnote");
   const chips = document.getElementById("chips");
   const clearbtn = document.getElementById("clearbtn");
+  const teamline = document.getElementById("teamline");
+  const teamname = document.getElementById("teamname");
   const modeSingleBtn = document.getElementById("modeSingle");
   const modeMultiBtn = document.getElementById("modeMulti");
   const tabsBar = document.getElementById("tabsBar");
@@ -355,6 +368,7 @@
     modeSingleBtn.classList.toggle("active", !multi);
     modeMultiBtn.classList.toggle("active", multi);
     tabsBar.style.display = multi ? "flex" : "none";
+    clearbtn.textContent = multi ? "Clear All" : "Clear";
     if (multi) {
       if (tabs.length === 0) {
         const t = newTab("");
@@ -384,6 +398,8 @@
     exactrow.style.display = "none";
     exactbtn.textContent = "Copy";
     exactbtn.classList.remove("copied");
+    teamline.style.display = "none";
+    teamname.textContent = "";
   }
 
   function parseRow() {
@@ -399,6 +415,13 @@
     dimlabel.classList.remove("empty");
     dimbtn.disabled = false;
     dimbtn.dataset.cmd = "/cofh tpx " + dim;
+
+    // Team name: {Team:"devilswitch"} at the end of the row
+    const teamMatch = raw.match(/Team:\s*"([^"]+)"/);
+    if (teamMatch) {
+      teamname.textContent = teamMatch[1];
+      teamline.style.display = "block";
+    }
 
     // Exact coords: [ x y z ]
     const bracket = raw.match(/\[\s*(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*\]/);
@@ -464,12 +487,17 @@
   rowin.addEventListener("input", () => {
     if (multiMode) {
       const t = tabs.find(x => x.id === activeId);
-      if (t) t.raw = rowin.value;
+      if (t) {
+        t.raw = rowin.value;
+        // Update just the active tab's label in place. A full renderTabs() here
+        // would rebuild every tab and cut off a still-playing just-added flash.
+        const lbl = tabsBar.querySelector(".tab.active .tab-label");
+        if (lbl) { lbl.textContent = tabLabel(t); lbl.title = lbl.textContent; }
+      }
     } else {
       singleRaw = rowin.value;
     }
     parseRow();
-    if (multiMode) renderTabs();
   });
 
   dimbtn.addEventListener("click", () => copy(dimbtn));
@@ -478,8 +506,10 @@
     rowin.value = "";
     resetRow();
     if (multiMode) {
-      const t = tabs.find(x => x.id === activeId);
-      if (t) t.raw = "";
+      // Each tab's × removes one; this wipes them all.
+      tabs = [];
+      const t = newTab("");
+      activeId = t.id;
       renderTabs();
     } else {
       singleRaw = "";
