@@ -39,6 +39,71 @@
   h1 { font-size: 18px; margin: 0 0 4px; }
   .hint { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
   .hint code { color: var(--teal); }
+  .mode-row {
+    display: inline-flex;
+    background: var(--code);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 3px;
+    margin: 0 0 16px;
+  }
+  button.mode-btn {
+    padding: 6px 14px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.mode-btn.active { background: var(--teal-dim); color: #04110f; }
+  .tabs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 14px;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px 6px 12px;
+    background: var(--code);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 13px;
+    cursor: pointer;
+    max-width: 180px;
+  }
+  .tab.active { border-color: var(--teal-dim); color: var(--teal); }
+  @keyframes tabAdded {
+    0%   { transform: scale(0.8);  box-shadow: 0 0 0 0 rgba(45,212,191,0.55); }
+    45%  { transform: scale(1.09); box-shadow: 0 0 0 6px rgba(45,212,191,0.30); }
+    100% { transform: scale(1);    box-shadow: 0 0 0 0 rgba(45,212,191,0); }
+  }
+  .tab.just-added { animation: tabAdded 0.55s ease-out; }
+  .tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab-close {
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 999px;
+  }
+  .tab-close:hover { color: var(--coral); background: rgba(248,119,107,0.12); }
+  button.tab-add {
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  button.tab-add:hover { color: var(--teal); border-color: var(--teal-dim); }
   .error { color: var(--coral); font-size: 13px; min-height: 18px; margin: 8px 2px 0; }
   .out-row {
     display: flex;
@@ -135,7 +200,12 @@
 <body>
   <div class="card">
     <h1>Opis Teleport Helper</h1>
-    <p class="hint">Run <code>/opis</code>, open <b>Forced Chunks</b>, and <code>Ctrl+C</code> any row — then paste it here. It pulls out the dimension, the exact anchor coords, and every claimed chunk.</p>
+    <p class="hint">Run <code>/opis</code>, open <b>Forced Chunks</b>, <code>Ctrl+C</code> any row, then paste it here. It pulls out the dimension, the exact anchor coords, and every claimed chunk. In <b>Multi</b> mode, a valid paste jumps to a fresh tab so you can paste the next row right away.</p>
+    <div class="mode-row">
+      <button class="mode-btn active" id="modeSingle">Single</button>
+      <button class="mode-btn" id="modeMulti">Multi</button>
+    </div>
+    <div class="tabs" id="tabsBar" style="display:none"></div>
     <textarea id="rowin" placeholder="8&#9;Space Station 8&#9;serverutilities&#9;…&#9;(0,0), (0,-1), (-1,0)&#9;{Team:&quot;heavens_knights&quot;}" spellcheck="false" autofocus></textarea>
     <div class="row-actions"><button class="clear-btn" id="clearbtn">Clear</button></div>
     <div class="error" id="rowerr"></div>
@@ -155,9 +225,24 @@
   </div>
 
 <script>
+  function fallbackCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+
   function copy(btn) {
     if (btn.disabled) return;
-    navigator.clipboard.writeText(btn.dataset.cmd).then(() => {
+    const text = btn.dataset.cmd;
+    const markCopied = () => {
       if (btn.classList.contains("chip")) {
         btn.classList.add("copied");
         setTimeout(() => btn.classList.remove("copied"), 1000);
@@ -166,7 +251,13 @@
         btn.classList.add("copied");
         setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1200);
       }
-    });
+    };
+    const useFallback = () => { if (fallbackCopy(text)) markCopied(); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(markCopied, useFallback);
+    } else {
+      useFallback();
+    }
   }
 
   // ---- Claim row parser ----
@@ -180,6 +271,106 @@
   const coordnote = document.getElementById("coordnote");
   const chips = document.getElementById("chips");
   const clearbtn = document.getElementById("clearbtn");
+  const modeSingleBtn = document.getElementById("modeSingle");
+  const modeMultiBtn = document.getElementById("modeMulti");
+  const tabsBar = document.getElementById("tabsBar");
+  const DIM_RE = /^\s*(-?\d+)/;
+
+  // ---- Multi mode / tabs ----
+  let multiMode = false;
+  let tabs = [];
+  let activeId = null;
+  let nextId = 1;
+  let singleRaw = ""; // Single mode's own box content, kept apart from any tab
+  let justAddedId = null; // tab to flash once on the next render
+
+  function newTab(raw) {
+    const t = { id: nextId++, raw: raw || "" };
+    tabs.push(t);
+    return t;
+  }
+
+  function tabLabel(t) {
+    const idx = tabs.indexOf(t) + 1;
+    const raw = t.raw.trim();
+    if (!raw) return "Tab " + idx;
+    const fields = t.raw.split("\t");
+    if (fields.length > 1 && fields[1].trim()) return fields[1].trim();
+    const dimMatch = raw.match(DIM_RE);
+    if (dimMatch) return "Dim " + dimMatch[1];
+    return "Tab " + idx;
+  }
+
+  function renderTabs() {
+    tabsBar.innerHTML = "";
+    tabs.forEach(t => {
+      const tab = document.createElement("div");
+      tab.className = "tab" + (t.id === activeId ? " active" : "") + (t.id === justAddedId ? " just-added" : "");
+      const label = document.createElement("span");
+      label.className = "tab-label";
+      label.textContent = tabLabel(t);
+      label.title = label.textContent;
+      label.addEventListener("click", () => selectTab(t.id));
+      tab.appendChild(label);
+      const close = document.createElement("span");
+      close.className = "tab-close";
+      close.textContent = "×";
+      close.addEventListener("click", (e) => { e.stopPropagation(); closeTab(t.id); });
+      tab.appendChild(close);
+      tabsBar.appendChild(tab);
+    });
+    justAddedId = null; // flash plays once, then reverts to a normal tab
+    const addBtn = document.createElement("button");
+    addBtn.className = "tab-add";
+    addBtn.type = "button";
+    addBtn.textContent = "+";
+    addBtn.addEventListener("click", () => { const t = newTab(""); selectTab(t.id); rowin.focus(); });
+    tabsBar.appendChild(addBtn);
+  }
+
+  function selectTab(id) {
+    activeId = id;
+    const t = tabs.find(x => x.id === id);
+    rowin.value = t ? t.raw : "";
+    parseRow();
+    renderTabs();
+  }
+
+  function closeTab(id) {
+    const idx = tabs.findIndex(x => x.id === id);
+    if (idx === -1) return;
+    tabs.splice(idx, 1);
+    if (tabs.length === 0) newTab("");
+    if (activeId === id) {
+      const nextIdx = Math.min(idx, tabs.length - 1);
+      activeId = tabs[nextIdx].id;
+    }
+    rowin.value = tabs.find(x => x.id === activeId).raw;
+    parseRow();
+    renderTabs();
+  }
+
+  function setMode(multi) {
+    multiMode = multi;
+    modeSingleBtn.classList.toggle("active", !multi);
+    modeMultiBtn.classList.toggle("active", multi);
+    tabsBar.style.display = multi ? "flex" : "none";
+    if (multi) {
+      if (tabs.length === 0) {
+        const t = newTab("");
+        activeId = t.id;
+      }
+      const t = tabs.find(x => x.id === activeId);
+      rowin.value = t ? t.raw : "";
+      renderTabs();
+    } else {
+      rowin.value = singleRaw;
+    }
+    parseRow();
+  }
+
+  modeSingleBtn.addEventListener("click", () => setMode(false));
+  modeMultiBtn.addEventListener("click", () => setMode(true));
 
   function resetRow() {
     rowerr.textContent = "";
@@ -200,7 +391,7 @@
     resetRow();
     if (!raw) return;
 
-    const dimMatch = raw.match(/^\s*(-?\d+)/);
+    const dimMatch = raw.match(DIM_RE);
     if (!dimMatch) { rowerr.textContent = "Couldn't find a dim ID at the start"; return; }
     const dim = dimMatch[1];
 
@@ -239,10 +430,62 @@
     }
   }
 
-  rowin.addEventListener("input", parseRow);
+  function isValidRow(raw) {
+    return DIM_RE.test(raw.trim());
+  }
+
+  rowin.addEventListener("paste", (e) => {
+    if (!multiMode) return;
+    const clip = e.clipboardData || window.clipboardData;
+    if (!clip) return;
+    const text = clip.getData("text");
+    // Let anything that isn't a claim row land in the box so it can be fixed by hand.
+    if (!isValidRow(text)) return;
+    // Keep the row out of the textarea entirely; it goes straight into a tab, so
+    // there's no flash of pasted text getting wiped a moment later.
+    e.preventDefault();
+    const active = tabs.find(x => x.id === activeId);
+    let captured;
+    if (active && active.raw.trim() === "") {
+      active.raw = text;
+      captured = active;
+    } else {
+      captured = newTab(text);
+    }
+    justAddedId = captured.id; // flash the tab that grabbed the paste
+    const fresh = newTab("");
+    activeId = fresh.id;
+    rowin.value = "";
+    resetRow();
+    renderTabs();
+    rowin.focus();
+  });
+
+  rowin.addEventListener("input", () => {
+    if (multiMode) {
+      const t = tabs.find(x => x.id === activeId);
+      if (t) t.raw = rowin.value;
+    } else {
+      singleRaw = rowin.value;
+    }
+    parseRow();
+    if (multiMode) renderTabs();
+  });
+
   dimbtn.addEventListener("click", () => copy(dimbtn));
   exactbtn.addEventListener("click", () => copy(exactbtn));
-  clearbtn.addEventListener("click", () => { rowin.value = ""; resetRow(); rowin.focus(); });
+  clearbtn.addEventListener("click", () => {
+    rowin.value = "";
+    resetRow();
+    if (multiMode) {
+      const t = tabs.find(x => x.id === activeId);
+      if (t) t.raw = "";
+      renderTabs();
+    } else {
+      singleRaw = "";
+    }
+    rowin.focus();
+  });
 </script>
 </body>
 </html>
