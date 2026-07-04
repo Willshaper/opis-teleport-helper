@@ -179,7 +179,28 @@
     color: var(--teal);
     font-family: "Consolas", "SF Mono", monospace;
   }
-  .coord-note { color: var(--muted); font-size: 12px; margin: 14px 2px 6px; min-height: 16px; }
+  .coord-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 16px 2px 6px;
+    min-height: 22px;
+  }
+  .coord-note { color: var(--muted); font-size: 12px; }
+  button.easy-toggle {
+    flex: 0 0 auto;
+    padding: 5px 12px;
+    background: var(--code);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.easy-toggle:hover { border-color: var(--teal-dim); }
+  button.easy-toggle.on { background: var(--teal-dim); border-color: var(--teal-dim); color: #04110f; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   button.chip {
     padding: 5px 9px;
@@ -209,7 +230,7 @@
 <body>
   <div class="card">
     <h1>Opis Teleport Helper</h1>
-    <p class="hint">Run <code>/opis</code>, open <b>Forced Chunks</b>, <code>Ctrl+C</code> any row, then paste it here. It pulls out the dimension, the exact anchor coords, and every claimed chunk. In <b>Multi</b> mode, a valid paste jumps to a fresh tab so you can paste the next row right away.</p>
+    <p class="hint">Run <code>/opis</code>, open <b>Forced Chunks</b>, <code>Ctrl+C</code> any row, then paste it here. It pulls out the dimension, the exact anchor coords, and every claimed chunk. In <b>Multi</b> mode, a valid paste jumps to a fresh tab so you can paste the next row right away. Turn on <b>Easy grouping</b> to merge touching chunks into one teleport per area.</p>
     <div class="mode-row">
       <button class="mode-btn active" id="modeSingle">Single</button>
       <button class="mode-btn" id="modeMulti">Multi</button>
@@ -231,7 +252,10 @@
       <button class="copy" id="exactbtn">Copy</button>
     </div>
 
-    <div class="coord-note" id="coordnote"></div>
+    <div class="coord-head">
+      <span class="coord-note" id="coordnote"></span>
+      <button class="easy-toggle" id="easytoggle" type="button" role="switch" aria-checked="false">Easy grouping: Off</button>
+    </div>
     <div class="chips" id="chips"></div>
   </div>
 
@@ -284,6 +308,7 @@
   const clearbtn = document.getElementById("clearbtn");
   const teamline = document.getElementById("teamline");
   const teamname = document.getElementById("teamname");
+  const easytoggle = document.getElementById("easytoggle");
   const modeSingleBtn = document.getElementById("modeSingle");
   const modeMultiBtn = document.getElementById("modeMulti");
   const tabsBar = document.getElementById("tabsBar");
@@ -296,6 +321,7 @@
   let nextId = 1;
   let singleRaw = ""; // Single mode's own box content, kept apart from any tab
   let justAddedId = null; // tab to flash once on the next render
+  let easyMode = false; // group touching chunks into one teleport per area
 
   function newTab(raw) {
     const t = { id: nextId++, raw: raw || "" };
@@ -402,6 +428,67 @@
     teamname.textContent = "";
   }
 
+  // Group chunks that touch (8-connectivity, so diagonals count) into clusters.
+  function clusterChunks(pairs) {
+    const key = (x, z) => x + "," + z;
+    const set = new Map();
+    pairs.forEach(([x, z]) => set.set(key(x, z), [x, z]));
+    const seen = new Set();
+    const clusters = [];
+    for (const [k, start] of set) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const stack = [start];
+      const members = [];
+      while (stack.length) {
+        const [cx, cz] = stack.pop();
+        members.push([cx, cz]);
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            if (dx === 0 && dz === 0) continue;
+            const nk = key(cx + dx, cz + dz);
+            if (set.has(nk) && !seen.has(nk)) {
+              seen.add(nk);
+              stack.push(set.get(nk));
+            }
+          }
+        }
+      }
+      clusters.push(members);
+    }
+    return clusters;
+  }
+
+  // Teleport target for a cluster: the bounding-box center, in block coords,
+  // plus the chunk coords to show on the chip.
+  function clusterCenter(members) {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const [x, z] of members) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+    const avgCx = (minX + maxX) / 2;
+    const avgCz = (minZ + maxZ) / 2;
+    let bx = Math.round(avgCx * 16 + 8);
+    let bz = Math.round(avgCz * 16 + 8);
+    // For concave shapes (L, ring, ...) the bounding-box center can land on a
+    // chunk that isn't claimed. Snap to the nearest claimed chunk so the
+    // teleport always drops inside loaded territory.
+    const centered = members.some(([mx, mz]) => mx === Math.floor(bx / 16) && mz === Math.floor(bz / 16));
+    if (!centered) {
+      let best = members[0], bestD = Infinity;
+      for (const [mx, mz] of members) {
+        const d = (mx - avgCx) ** 2 + (mz - avgCz) ** 2;
+        if (d < bestD) { bestD = d; best = [mx, mz]; }
+      }
+      bx = best[0] * 16 + 8;
+      bz = best[1] * 16 + 8;
+    }
+    return { bx, bz, ccx: Math.floor(bx / 16), ccz: Math.floor(bz / 16) };
+  }
+
   function parseRow() {
     const raw = rowin.value.trim();
     resetRow();
@@ -439,16 +526,32 @@
     while ((m = re.exec(raw)) !== null) pairs.push([Number(m[1]), Number(m[2])]);
 
     if (pairs.length) {
-      coordnote.textContent = `${pairs.length} chunk coord${pairs.length === 1 ? "" : "s"}`;
-      for (const [x, z] of pairs) {
-        const cmd = `/cofh tpx ${x * 16} 120 ${z * 16}`;
-        const b = document.createElement("button");
-        b.className = "chip";
-        b.textContent = `(${x},${z})`;
-        b.title = cmd;
-        b.dataset.cmd = cmd;
-        b.addEventListener("click", () => copy(b));
-        chips.appendChild(b);
+      if (easyMode) {
+        const clusters = clusterChunks(pairs);
+        coordnote.textContent = `${clusters.length} area${clusters.length === 1 ? "" : "s"} from ${pairs.length} chunk${pairs.length === 1 ? "" : "s"}`;
+        for (const members of clusters) {
+          const c = clusterCenter(members);
+          const cmd = `/cofh tpx ${c.bx} 120 ${c.bz}`;
+          const b = document.createElement("button");
+          b.className = "chip";
+          b.textContent = `(${c.ccx},${c.ccz}) ×${members.length}`;
+          b.title = cmd;
+          b.dataset.cmd = cmd;
+          b.addEventListener("click", () => copy(b));
+          chips.appendChild(b);
+        }
+      } else {
+        coordnote.textContent = `${pairs.length} chunk coord${pairs.length === 1 ? "" : "s"}`;
+        for (const [x, z] of pairs) {
+          const cmd = `/cofh tpx ${x * 16} 120 ${z * 16}`;
+          const b = document.createElement("button");
+          b.className = "chip";
+          b.textContent = `(${x},${z})`;
+          b.title = cmd;
+          b.dataset.cmd = cmd;
+          b.addEventListener("click", () => copy(b));
+          chips.appendChild(b);
+        }
       }
     }
   }
@@ -497,6 +600,14 @@
     } else {
       singleRaw = rowin.value;
     }
+    parseRow();
+  });
+
+  easytoggle.addEventListener("click", () => {
+    easyMode = !easyMode;
+    easytoggle.classList.toggle("on", easyMode);
+    easytoggle.textContent = easyMode ? "Easy grouping: On" : "Easy grouping: Off";
+    easytoggle.setAttribute("aria-checked", easyMode ? "true" : "false");
     parseRow();
   });
 
